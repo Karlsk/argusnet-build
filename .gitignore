@@ -1,0 +1,9 @@
+src/
+pkg/
+docker-pkg/
+data/
+.work/
+.env
+.DS_Store
+*.log
+*.tmp

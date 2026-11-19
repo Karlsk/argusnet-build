@@ -1,0 +1,120 @@
+networks:
+  argusnet:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:12-alpine
+    platform: linux/${TARGET_ARCH}
+    pull_policy: never
+    container_name: argusnet-postgres
+    hostname: postgres
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${PG_DB}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - ${DATA_ROOT}/pgdata:/var/lib/postgresql/data
+      - ./initsql:/docker-entrypoint-initdb.d/:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d ${PG_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - argusnet
+
+  redis:
+    image: redis:7.0-alpine
+    platform: linux/${TARGET_ARCH}
+    pull_policy: never
+    container_name: argusnet-redis
+    hostname: redis
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ${DATA_ROOT}/redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - argusnet
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.79.12
+    platform: linux/${TARGET_ARCH}
+    pull_policy: never
+    container_name: argusnet-victoriametrics
+    hostname: victoriametrics
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+    command:
+      - "--loggerTimezone=Asia/Shanghai"
+      - "--retentionPeriod=3"
+    volumes:
+      - ${DATA_ROOT}/vmdata:/victoria-metrics-data
+    ports:
+      - "127.0.0.1:${VM_PORT}:8428"
+    networks:
+      - argusnet
+
+  nightingale:
+    image: ${SERVER_IMAGE}
+    platform: linux/${TARGET_ARCH}
+    pull_policy: never
+    container_name: argusnet-nightingale
+    hostname: nightingale
+    restart: always
+    environment:
+      GIN_MODE: release
+      TZ: Asia/Shanghai
+    volumes:
+      - ./server/etc:/app/etc
+    ports:
+      - "${HTTP_PORT}:17000"
+      - "${IBEX_PORT}:20090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket;socket.create_connection(('127.0.0.1',17000),3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - argusnet
+
+  categraf:
+    image: ${AGENT_IMAGE}
+    platform: linux/${TARGET_ARCH}
+    pull_policy: never
+    container_name: argusnet-categraf
+    hostname: categraf01
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+      HOST_PROC: /hostfs/proc
+      HOST_SYS: /hostfs/sys
+      HOST_MOUNT_PREFIX: /hostfs
+    volumes:
+      - ./categraf-conf:/etc/categraf/conf
+      - /:/hostfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      nightingale:
+        condition: service_healthy
+    networks:
+      - argusnet
